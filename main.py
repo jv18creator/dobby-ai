@@ -4,6 +4,7 @@ from google import genai
 from google.genai import types
 import sys
 from config import system_prompt
+from functions.call_function import call_function
 
 load_dotenv()
 api_key = os.environ.get('GEMINI_API_KEY')
@@ -102,17 +103,32 @@ def main():
     )
 
     response = client.models.generate_content(model='gemini-2.0-flash-001', contents=messages, config=types.GenerateContentConfig(tools=[available_functions],system_instruction=system_prompt))
-    if '--verbose' in sys.argv:
+
+    verbose = '--verbose' in sys.argv
+    if verbose:
         print("Verbose mode enabled")
         print(f"User prompt: {content}")
         print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
         print("Response tokens:", response.usage_metadata.candidates_token_count)
 
-    # print(response.text)
+    # Handle function calls from the response
+    function_responses = []
     if response.candidates[0].content.parts:
         for part in response.candidates[0].content.parts:
             if part.function_call:
-                print(f"Calling function: {part.function_call.name}({part.function_call.args})")
+                # Call the function and get the result
+                function_call_result = call_function(part.function_call, verbose=verbose)
+
+                # Verify the result has function_response
+                if not function_call_result.parts[0].function_response:
+                    raise Exception("Function call did not return a valid function_response")
+
+                # Collect the response
+                function_responses.append(function_call_result.parts[0])
+
+                # Print the result if verbose
+                if verbose:
+                    print(f"-> {function_call_result.parts[0].function_response.response}")
 
 
 if __name__ == "__main__":
