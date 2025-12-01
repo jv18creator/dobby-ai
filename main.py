@@ -102,33 +102,74 @@ def main():
         ]
     )
 
-    response = client.models.generate_content(model='gemini-2.0-flash-001', contents=messages, config=types.GenerateContentConfig(tools=[available_functions],system_instruction=system_prompt))
-
     verbose = '--verbose' in sys.argv
     if verbose:
         print("Verbose mode enabled")
         print(f"User prompt: {content}")
-        print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-        print("Response tokens:", response.usage_metadata.candidates_token_count)
 
-    # Handle function calls from the response
-    function_responses = []
-    if response.candidates[0].content.parts:
-        for part in response.candidates[0].content.parts:
-            if part.function_call:
-                # Call the function and get the result
-                function_call_result = call_function(part.function_call, verbose=verbose)
+    # Loop to handle multiple rounds of function calling
+    max_iterations = 20
+    for iteration in range(max_iterations):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.0-flash-001',
+                contents=messages,
+                config=types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt)
+            )
 
-                # Verify the result has function_response
-                if not function_call_result.parts[0].function_response:
-                    raise Exception("Function call did not return a valid function_response")
+            if verbose:
+                print(f"Iteration {iteration + 1}:")
+                print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
+                print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
 
-                # Collect the response
-                function_responses.append(function_call_result.parts[0])
+            # Add each candidate's content to messages
+            for candidate in response.candidates:
+                messages.append(candidate.content)
 
-                # Print the result if verbose
-                if verbose:
-                    print(f"-> {function_call_result.parts[0].function_response.response}")
+            # Check if any candidate has function calls
+            has_function_calls = False
+            function_responses = []
+
+            if response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if part.function_call:
+                        has_function_calls = True
+                        # Call the function and get the result
+                        function_call_result = call_function(part.function_call, verbose=verbose)
+
+                        # Verify the result has function_response
+                        if not function_call_result.parts[0].function_response:
+                            raise Exception("Function call did not return a valid function_response")
+
+                        # Collect the response
+                        function_responses.append(function_call_result.parts[0])
+
+                        # Print the result if verbose
+                        if verbose:
+                            print(f"-> {function_call_result.parts[0].function_response.response}")
+
+            # Check if the model is finished
+            if not has_function_calls and response.text:
+                # Model is finished, print final response and break
+                print("Final response:")
+                print(response.text)
+                break
+
+            # If we have function responses, send them back to the model
+            if function_responses:
+                # Create a types.Content with role="user" containing the function results
+                function_results_content = types.Content(
+                    role="user",
+                    parts=function_responses
+                )
+                messages.append(function_results_content)
+
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            break
+    else:
+        # Loop completed without breaking (max iterations reached)
+        print("Maximum iterations reached without final response.")
 
 
 if __name__ == "__main__":
